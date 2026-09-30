@@ -15,7 +15,6 @@ import pm4py
 import pm4py.objects.log.importer.xes.importer as xes_importer
 from pm4py.objects.log.obj import EventLog
 from prosit import SimulatorParameters, SimulatorEngine
-from prosit_compat import prepare_log_for_prosit
 from datetime import datetime
 import numpy as np
 
@@ -28,7 +27,6 @@ if __name__ == "__main__":
     # Load log
     # download data at: https://github.com/franvinci/prosit-tool/blob/main/example_data/purchasing.xe
     log = xes_importer.apply("data/purchasing.xes")
-    prepare_log_for_prosit(log)
 
     # Split: use 80% for discovery, compare simulation against remaining 20%
     n_cases = len(log)
