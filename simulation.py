@@ -24,7 +24,7 @@ import random
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-paths = {
+PATHS = {
     "cvs": "data/CVS/cvs_pharmacy.xes",
     "bpi2012": "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes",
     "bpi2017": "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes",
@@ -32,6 +32,7 @@ paths = {
     "p2p": "data/P2P/PurchasingExample.xes",
 }
 
+DATASET = "acr"  # "cvs", "bpi2012", "bpi2017", "acr", "p2p"
 
 # def petrinet_from_eventlog_with_IM(data_path):
 #     log = xes_importer.apply(data_path)
@@ -45,7 +46,7 @@ paths = {
 
 #     return net, im, fm
 
-def clean_timestamp_features(log):
+def clean_timestamp_features(log, dataset=None):
     """
     Normalize CVS event attributes for compatibility with Prosit.
     """
@@ -60,10 +61,21 @@ def clean_timestamp_features(log):
         "resourceCost",
         "resourceId",
     }
+
+    if dataset == "acr":
+        activity_names = {
+            event.get("concept:name")
+            for trace in log
+            for event in trace
+            if event.get("concept:name") is not None
+        }
     for trace in log:
         for event in trace:
             if "start:timestamp" not in event:
                 event["start:timestamp"] = event["time:timestamp"]
+            if dataset == "acr":
+                if event.get("org:resource") in activity_names:
+                    event["org:resource"] = f"resource:{event['org:resource']}"
             for attribute in event_attributes_to_ignore:
                 if attribute in event:
                     del event[attribute]
@@ -86,7 +98,7 @@ def print_param_details(params):
     print(params.resources)
 
     # Working calendar per resource (weekday -> hour -> bool)
-    print(params.calendars["Technician-000002"])
+    print(params.calendars[params.resources[0]])
 
     # Per-resource maximum concurrency (1 = no multitasking, >1 = multitasking)
     print(params.max_concurrency)
@@ -122,19 +134,18 @@ def print_param_details(params):
     # or {'mode': 'distribution', 'data': {attr: {'type': 'categorical'|'continuous', ...}}}
 
 if __name__ == "__main__":
-    log = xes_importer.apply(paths["bpi2017"])
-    # take only the first 1000 traces for faster testing
-    log = log[:100]
-    log = clean_timestamp_features(log)
-    log = add_missing_values(log, "Resource")
-    # # inspect the log by printing the first 5 traces
-    # for trace in log[:5]:
-    #     print(trace)
+    log = xes_importer.apply(PATHS[DATASET])
 
-    # # print the attributes together with the types
-    # print("Attributes and types:")
-    # for attr in log[0][0].keys():
-    #     print(f"{attr}: {type(log[0][0][attr])}")
+    if DATASET == "cvs":
+        log = clean_timestamp_features(log)
+        log = add_missing_values(log, "org:resource")
+
+    if DATASET == "bpi2012" or DATASET == "bpi2017":
+        log = clean_timestamp_features(log)
+        log = add_missing_values(log, "Resource")
+
+    if DATASET == "acr":
+        log = clean_timestamp_features(log, DATASET)
 
     # Split: use 80% for discovery, compare simulation against remaining 20%
     n_cases = len(log)
@@ -147,7 +158,7 @@ if __name__ == "__main__":
     params = SimulatorParameters(net, im, fm)
     params.discover_from_eventlog(train_log)
 
-    # print_param_details(params)
+    print_param_details(params)
 
     # Simulate the same number of cases as the test set
     engine = SimulatorEngine(params)
