@@ -32,7 +32,7 @@ PATHS = {
     "p2p": "data/P2P/PurchasingExample.xes",
 }
 
-DATASET = "acr"  # "cvs", "bpi2012", "bpi2017", "acr", "p2p"
+DATASET = "p2p"  # "cvs", "bpi2012", "bpi2017", "acr", "p2p"
 
 # def petrinet_from_eventlog_with_IM(data_path):
 #     log = xes_importer.apply(data_path)
@@ -146,6 +146,9 @@ if __name__ == "__main__":
 
     if DATASET == "acr":
         log = clean_timestamp_features(log, DATASET)
+
+    if DATASET == "p2p":
+        log = clean_timestamp_features(log)
 
     # Split: use 80% for discovery, compare simulation against remaining 20%
     n_cases = len(log)
