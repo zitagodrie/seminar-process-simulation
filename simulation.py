@@ -24,7 +24,13 @@ import random
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-
+paths = {
+    "cvs": "data/CVS/cvs_pharmacy.xes",
+    "bpi2012": "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes",
+    "bpi2017": "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes",
+    "acr": "data/ACR/ConsultaDataMining201618.xes",
+    "p2p": "data/P2P/PurchasingExample.xes",
+}
 
 
 # def petrinet_from_eventlog_with_IM(data_path):
@@ -65,18 +71,18 @@ def clean_timestamp_features(log):
     # discovery and for mapping resources to activities.
     return log
 
-def add_missing_values(log):
+def add_missing_values(log, feature):
 
     # If 'org:resource'  not assigned, then add 'missing'
     for trace in log:
         for event in trace:
-            if "org:resource" not in event:
-                event["org:resource"] = "missing"
+            if feature not in event:
+                event[feature] = "missing"
 
     return log
 
 def print_param_details(params):
-        # Resources discovered from the log
+    # Resources discovered from the log
     print(params.resources)
 
     # Working calendar per resource (weekday -> hour -> bool)
@@ -116,11 +122,11 @@ def print_param_details(params):
     # or {'mode': 'distribution', 'data': {attr: {'type': 'categorical'|'continuous', ...}}}
 
 if __name__ == "__main__":
-    log = xes_importer.apply("data/CVS/cvs_pharmacy.xes")
+    log = xes_importer.apply(paths["bpi2017"])
     # take only the first 1000 traces for faster testing
     log = log[:100]
     log = clean_timestamp_features(log)
-    log = add_missing_values(log)
+    log = add_missing_values(log, "Resource")
     # # inspect the log by printing the first 5 traces
     # for trace in log[:5]:
     #     print(trace)
@@ -141,7 +147,7 @@ if __name__ == "__main__":
     params = SimulatorParameters(net, im, fm)
     params.discover_from_eventlog(train_log)
 
-    print_param_details(params)
+    # print_param_details(params)
 
     # Simulate the same number of cases as the test set
     engine = SimulatorEngine(params)
