@@ -23,7 +23,7 @@ RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
 # Specify which dataset to run the simulation on. Choose from the keys of `DATASETS`.
-DATASET = "p2p"
+DATASET = "bpi2012"
 
 def print_param_details(params):
     """Print the discovered simulator parameters for experiment inspection."""
@@ -68,7 +68,7 @@ def print_param_details(params):
 
 def main():
     log = load_dataset(DATASET)
-    train_log, test_log = split_log(log)
+    train_log, test_log = train_test_split(log, DATASET)
 
     # Discover from training set
     net, im, fm = pm4py.discover_petri_net_inductive(train_log)

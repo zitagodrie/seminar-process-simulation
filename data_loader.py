@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import os
+import pandas as pd
 import pm4py
 import pm4py.objects.log.importer.xes.importer as xes_importer
 from pm4py.objects.log.obj import EventLog
@@ -9,29 +11,80 @@ class DatasetConfig:
     """Describe how one XES dataset should be loaded and normalized."""
 
     path: str
+    split_from_file: bool = False
     resource_feature: str | None = None
     normalize_resource_names: bool = False
 
 DATASETS = {
     "cvs": DatasetConfig(
-        "data/CVS/cvs_pharmacy.xes", 
+        "data/CVS/cvs_pharmacy.xes",
         resource_feature="org:resource"
     ),
     "bpi2012": DatasetConfig(
-        "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes",
+        "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes", 
+        split_from_file=True,
         resource_feature="Resource"
     ),
     "bpi2017": DatasetConfig(
-        "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes",
+        "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes", 
+        split_from_file=True,
         resource_feature="Resource"
     ),
     "acr": DatasetConfig(
-        "data/ACR/ConsultaDataMining201618.xes",
+        "data/ACR/ConsultaDataMining201618.xes", 
+        split_from_file=True,
         normalize_resource_names=True,
     ),
-    "p2p": DatasetConfig("data/P2P/PurchasingExample.xes"),
+    "p2p": DatasetConfig(
+        "data/P2P/PurchasingExample.xes",
+        split_from_file=True,
+    ),
 }
 
+def read_case_ids(csv_path):
+    """Read the case IDs stored in a CSV split file."""
+    csv_df = pd.read_csv(csv_path)
+    return set(csv_df["Case ID"].astype(str).str.strip())
+
+
+def filter_log_by_case_ids(log, case_ids):
+    """Keep only traces whose case identifier is in the provided set."""
+    return EventLog(
+        [
+            trace
+            for trace in log
+            if str(trace.attributes.get("concept:name")).strip() in case_ids
+        ]
+    )
+
+
+def create_data_split(log, csv_path):
+    """Build a log subset from the case IDs in a CSV split file."""
+    case_ids = read_case_ids(csv_path)
+    return filter_log_by_case_ids(log, case_ids)
+
+
+def get_split_paths(data_set):
+    """Return the train/test CSV paths for a dataset that stores splits on disk."""
+    data_path = DATASETS[data_set].path
+    directory_path = os.path.dirname(data_path)
+    return (
+        os.path.join(directory_path, "folds/train.csv"),
+        os.path.join(directory_path, "folds/test.csv"),
+    )
+
+
+def split_log_from_file(log, data_set):
+    """Create train/test logs from dataset split CSV files."""
+    train_path, test_path = get_split_paths(data_set)
+    return create_data_split(log, train_path), create_data_split(log, test_path)
+
+
+def train_test_split(log, data_set):
+    """Return train and test logs using either CSV-based or chronological splitting."""
+    if DATASETS[data_set].split_from_file:
+        return split_log_from_file(log, data_set)
+    return split_log(log)
 
 def clean_timestamp_features(log):
     """Add start timestamps and remove event fields Prosit cannot discover."""
