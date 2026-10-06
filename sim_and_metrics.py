@@ -21,8 +21,50 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+def print_param_details(params):
+    """Print the discovered simulator parameters for experiment inspection."""
+    # Resources discovered from the log
+    print(params.resources)
+
+    # Working calendar per resource (weekday -> hour -> bool)
+    print(params.calendars[params.resources[0]])
+
+    # Per-resource maximum concurrency (1 = no multitasking, >1 = multitasking)
+    print(params.max_concurrency)
+
+    # Which resources can perform each activity
+    print(params.act_to_resources)
+
+    # Whether rules mode (Decision Trees) is active
+    print(params.rules_mode)
+
+    # Arrival time model (DecisionRules in rules mode, distribution tuple in no-rules mode)
+    print(params.arrival_time_distribution)
+
+    # Execution time model per activity (DecisionRules or distribution tuple)
+    print(params.execution_time_distributions)
+
+    # Waiting time model per resource (DecisionRules or distribution tuple)
+    print(params.waiting_time_distributions)
+
+    # Resource selection: flat dict {resource: DecisionRules|float}. One binary
+    # classifier per resource, trained on the events where the resource was
+    # eligible (activity's candidate pool). At simulation time, the engine first
+    # filters resources via `act_to_resources[activity]`, scores each enabled
+    # resource with its own tree, and samples proportionally.
+    print(params.resource_weights)
+
+    # Control flow model per transition (DecisionRules in rules mode, float frequency in no-rules)
+    print(params.transition_weights)
+
+    # Case-level data attribute distribution (None if no attributes in log)
+    print(params.distribution_data_attributes)
+    # {'mode': 'empirical', 'data': {(val1, val2): frequency, ...}}
+    # or {'mode': 'distribution', 'data': {attr: {'type': 'categorical'|'continuous', ...}}}
+
+
 # Main replication function
-def main(dataset_name, n_simulations=1, random_seed=42):
+def do_everything(dataset_name, n_simulations=1, random_seed=42):
 
     # Load event log
     log = load_dataset(dataset_name)
