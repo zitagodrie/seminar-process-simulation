@@ -4,6 +4,68 @@ import numpy as np
 from collections import Counter
 from scipy.stats import wasserstein_distance
 
+def calculate_table1_metrics(train_log, test_log, engine, n_simulations=1):
+    results = []
+    simulated_logs = []
+
+    # Use the beginning of the TEST log as simulation start.
+    # This is important for CAR.
+    test_arrivals = case_arrival_times(test_log)
+
+    if len(test_arrivals) == 0:
+        raise ValueError("Could not determine test-log case arrival times.")
+
+    simulation_start = test_arrivals.min()
+
+    for run in range(n_simulations):
+
+        print(f"\n========== Simulation {run + 1}/{n_simulations} ==========")
+
+        # run simulation
+        sim_log = engine.apply(n_traces=len(test_log), t_start=simulation_start)
+
+        # Calculate the three paper metrics
+        ngd_value = ngd(test_log, sim_log, n=3)
+        print(f"NGD = {ngd_value:.4f}")
+    
+        ctd_value = ctd(test_log, sim_log)
+        print(f"CTD = {ctd_value:.2f}")
+        
+        car_value = car(test_log, sim_log)
+        print(f"CAR = {car_value:.2f}")
+
+        result = {
+            "run": run + 1,
+            "NGD": ngd_value,
+            "CTD": ctd_value,
+            "CAR": car_value
+        }
+        results.append(result)
+        simulated_logs.append(sim_log)
+
+    # Store results
+    metrics_df = pd.DataFrame(results)
+
+    averages = {
+        "NGD": metrics_df["NGD"].mean(),
+        "CTD": metrics_df["CTD"].mean(),
+        "CAR": metrics_df["CAR"].mean()
+    }
+
+    print("\n========== Average metrics ==========")
+    print(f"NGD: {averages['NGD']:.4f}")
+    print(f"CTD: {averages['CTD']:.2f}")
+    print(f"CAR: {averages['CAR']:.2f}")
+
+    # Return
+    return {
+        "simulated_logs": simulated_logs,
+        "metrics": metrics_df,
+        "average_metrics": averages,
+        "train_log": train_log,
+        "test_log": test_log
+    }
+
 def _get_case_id(event):
     """Get case ID from a PM4Py event or pandas row."""
     if isinstance(event, dict):
