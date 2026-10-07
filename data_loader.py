@@ -13,12 +13,14 @@ class DatasetConfig:
     path: str
     split_from_file: bool = False
     resource_feature: str | None = None
+    activity_feature: str = "Activity"
     normalize_resource_names: bool = False
 
 DATASETS = {
     "cvs": DatasetConfig(
         "data/CVS/cvs_pharmacy.xes",
-        resource_feature="org:resource"
+        resource_feature="org:resource",
+        activity_feature="concept:name",
     ),
     "bpi2012": DatasetConfig(
         "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes", 

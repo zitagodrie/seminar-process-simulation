@@ -54,7 +54,7 @@ def simulate_process(engine, test_log, verbose=False):
 
     return sim_log
 
-def simulate_process_with_metrics(engine, train_log, test_log, n_simulations=1):
+def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulations=1):
     results = []
     simulated_logs = []
 
@@ -70,17 +70,19 @@ def simulate_process_with_metrics(engine, train_log, test_log, n_simulations=1):
         print(f"\n========== Simulation {run + 1}/{n_simulations} ==========")
 
         # run simulation
-        sim_log = simulate_process(engine, test_log)
+        sim_log = simulate_process(engine, test_log)s
 
         # Calculate the metrics
         ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
-        entropy_value = average_execution_time_entropy(sim_log)
+        # add table 2/3 metrics here
+        entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
 
         result = {
             "run": run + 1,
             "NGD": ngd_value,
             "CTD": ctd_value,
             "CAR": car_value,
+            # add table 2/3 metrics here
             "Execution Time Entropy": entropy_value
         }
         results.append(result)
@@ -93,6 +95,7 @@ def simulate_process_with_metrics(engine, train_log, test_log, n_simulations=1):
         "NGD": metrics_df["NGD"].mean(),
         "CTD": metrics_df["CTD"].mean(),
         "CAR": metrics_df["CAR"].mean(),
+        #add table 2/3 metrics here
         "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
     }
 
@@ -125,7 +128,7 @@ def main():
     engine = SimulatorEngine(params)
 
     if args.calculate_metrics:
-        simulate_process_with_metrics(engine, train_log, test_log)
+        simulate_process_with_metrics(engine, train_log, test_log, args)
     else:
         # test a simulation anyways, if metrics are not being calculated
         sim_log = simulate_process(engine, test_log)

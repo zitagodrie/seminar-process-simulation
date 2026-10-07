@@ -16,40 +16,18 @@ def execution_time_entropy(durations, base: float | None = None) -> float:
 
 def average_execution_time_entropy(
     sim_log: pd.DataFrame,
-    activity_col: str = "activity",
-    start_col: str = "start_timestamp",
-    end_col: str = "end_timestamp",
+    activity_col: str = "Activity",
+    start_col: str = "start:timestamp",
+    end_col: str = "time:timestamp",
     base: float | None = None,
 ) -> float:
     """Mean over activities of the discretized entropy of execution times."""
-    if activity_col not in sim_log.columns:
-        for candidate in ("concept:name", "activity"):
-            if candidate in sim_log.columns:
-                activity_col = candidate
-                break
-        else:
-            raise ValueError("Could not find activity column.")
-
-    if start_col not in sim_log.columns:
-        for candidate in ("start:timestamp", "start_timestamp", "time:timestamp"):
-            if candidate in sim_log.columns:
-                start_col = candidate
-                break
-        else:
-            raise ValueError("Could not find start timestamp column.")
-
-    if end_col not in sim_log.columns:
-        for candidate in ("end:timestamp", "end_timestamp", "time:timestamp"):
-            if candidate in sim_log.columns:
-                end_col = candidate
-                break
-        else:
-            raise ValueError("Could not find end timestamp column.")
 
     start = pd.to_datetime(sim_log[start_col])
     end = pd.to_datetime(sim_log[end_col])
     duration_seconds = (end - start).dt.total_seconds()
 
+    print(sim_log[activity_col].value_counts())
     entropy_per_activity = duration_seconds.groupby(sim_log[activity_col]).agg(
         execution_time_entropy, base=base
     )
