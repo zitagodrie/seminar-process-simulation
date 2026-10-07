@@ -57,7 +57,7 @@ def simulate_process(engine, test_log, verbose=False):
 def main():
     args = parse_args()
     log = load_dataset(args.dataset)
-    train_log, test_log = split_log(log)
+    train_log, test_log = train_test_split(log, args.dataset)
 
     # Discover from training set
     net, im, fm = pm4py.discover_petri_net_inductive(train_log)
