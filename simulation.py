@@ -25,6 +25,8 @@ warnings.filterwarnings("ignore")
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
+N_SIM = {"none": 0, "fast": 1, "realistic": 5}  # number of simulation runs for each mode, realistic is the paper of the setting
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run a process simulation experiment.")
     parser.add_argument(
@@ -35,11 +37,12 @@ def parse_args():
         help="Dataset to simulate.",
     )
     parser.add_argument(
-        "-cm",
-        "--calculate-metrics",
-        dest="calculate_metrics",
-        action="store_true",
-        help="Calculate metrics after the simulation.",
+        "-s",
+        "--simulations",
+        type=str,
+        default="none",
+        choices=N_SIM.keys(),
+        help="Simulation mode for the experiment.",
     )
     return parser.parse_args()
 
@@ -54,7 +57,21 @@ def simulate_process(engine, test_log, verbose=False):
 
     return sim_log
 
-def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulations=1):
+def write_metrics_to_csv(metric_avg: dict, args, path: str = "metrics.csv") -> None:
+    """Append averaged metrics, run arguments, and a timestamp to a CSV file.
+
+    The result is one row per call: metrics, then args, then timestamp.
+    """
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        **vars(args),
+        **metric_avg,
+    }
+    file_exists = os.path.exists(path)
+    pd.DataFrame([row]).to_csv(path, mode="a", header=not file_exists, index=False)
+    print(f"Metrics written to {path}")
+
+def simulate_process_with_metrics(engine, test_log, args):
     results = []
     simulated_logs = []
 
@@ -65,9 +82,9 @@ def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulatio
     if len(test_arrivals) == 0:
         raise ValueError("Could not determine test-log case arrival times.")
 
-    for run in range(n_simulations):
+    for run in range(N_SIM[args.simulations]):
 
-        print(f"\n========== Simulation {run + 1}/{n_simulations} ==========")
+        print(f"\n========== Simulation {run + 1}/{N_SIM[args.simulations]} ==========")
 
         # run simulation
         sim_log = simulate_process(engine, test_log)
@@ -99,6 +116,9 @@ def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulatio
         "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
     }
 
+    write_metrics_to_csv(averages, args)
+
+
     print("\n========== Average metrics ==========")
     print(f"NGD: {averages['NGD']:.4f}")
     print(f"CTD: {averages['CTD']:.2f}")
@@ -109,9 +129,7 @@ def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulatio
     return {
         "simulated_logs": simulated_logs,
         "metrics": metrics_df,
-        "average_metrics": averages,
-        "train_log": train_log,
-        "test_log": test_log
+        "average_metrics": averages
     }
 
 def main():
@@ -127,12 +145,8 @@ def main():
     # Simulate the same number of cases as the test set
     engine = SimulatorEngine(params)
 
-    if args.calculate_metrics:
-        simulate_process_with_metrics(engine, train_log, test_log, args)
-    else:
-        # test a simulation anyways, if metrics are not being calculated
-        sim_log = simulate_process(engine, test_log)
-
+    if N_SIM[args.simulations] > 0:
+        simulate_process_with_metrics(engine, test_log, args)
 
 if __name__ == "__main__":
     main()
