@@ -17,7 +17,7 @@ def execution_time_entropy(durations, base: float | None = None) -> float:
 def average_execution_time_entropy(
     sim_log: pd.DataFrame,
     activity_col: str = "Activity",
-    start_col: str = "start:timestamp",
+    start_col: str = "enabled:timestamp",
     end_col: str = "time:timestamp",
     base: float | None = None,
 ) -> float:
@@ -27,7 +27,10 @@ def average_execution_time_entropy(
     end = pd.to_datetime(sim_log[end_col])
     duration_seconds = (end - start).dt.total_seconds()
 
-    print(sim_log[activity_col].value_counts())
+    print(f"Fraction of identical rows: {((sim_log[start_col] == sim_log[end_col]).mean()):.4f}")  # fraction of identical rows
+    print(f"Distribution of execution times (seconds):")
+    print(duration_seconds.describe())
+
     entropy_per_activity = duration_seconds.groupby(sim_log[activity_col]).agg(
         execution_time_entropy, base=base
     )

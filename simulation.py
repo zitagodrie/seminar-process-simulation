@@ -70,7 +70,7 @@ def simulate_process_with_metrics(engine, train_log, test_log, args, n_simulatio
         print(f"\n========== Simulation {run + 1}/{n_simulations} ==========")
 
         # run simulation
-        sim_log = simulate_process(engine, test_log)s
+        sim_log = simulate_process(engine, test_log)
 
         # Calculate the metrics
         ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
