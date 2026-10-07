@@ -11,12 +11,13 @@ import pm4py
 import pm4py.objects.log.importer.xes.importer as xes_importer
 from prosit import SimulatorEngine, SimulatorParameters
 from data_loader import *
-from table1metrics import calculate_table1_metrics
+from table1metrics import calculate_table1_metrics, case_arrival_times
+from table4metrics import average_execution_time_entropy
 
 import os
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -53,6 +54,62 @@ def simulate_process(engine, test_log, verbose=False):
 
     return sim_log
 
+def simulate_process_with_metrics(engine, train_log, test_log, n_simulations=1):
+    results = []
+    simulated_logs = []
+
+    # Use the beginning of the TEST log as simulation start.
+    # This is important for CAR.
+    test_arrivals = case_arrival_times(test_log)
+
+    if len(test_arrivals) == 0:
+        raise ValueError("Could not determine test-log case arrival times.")
+
+    for run in range(n_simulations):
+
+        print(f"\n========== Simulation {run + 1}/{n_simulations} ==========")
+
+        # run simulation
+        sim_log = simulate_process(engine, test_log)
+
+        # Calculate the metrics
+        ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
+        entropy_value = average_execution_time_entropy(sim_log)
+
+        result = {
+            "run": run + 1,
+            "NGD": ngd_value,
+            "CTD": ctd_value,
+            "CAR": car_value,
+            "Execution Time Entropy": entropy_value
+        }
+        results.append(result)
+        simulated_logs.append(sim_log)
+
+    # Store results
+    metrics_df = pd.DataFrame(results)
+
+    averages = {
+        "NGD": metrics_df["NGD"].mean(),
+        "CTD": metrics_df["CTD"].mean(),
+        "CAR": metrics_df["CAR"].mean(),
+        "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
+    }
+
+    print("\n========== Average metrics ==========")
+    print(f"NGD: {averages['NGD']:.4f}")
+    print(f"CTD: {averages['CTD']:.2f}")
+    print(f"CAR: {averages['CAR']:.2f}")
+    print(f"Execution Time Entropy: {averages['Execution Time Entropy']:.4f}")
+
+    # Return
+    return {
+        "simulated_logs": simulated_logs,
+        "metrics": metrics_df,
+        "average_metrics": averages,
+        "train_log": train_log,
+        "test_log": test_log
+    }
 
 def main():
     args = parse_args()
@@ -68,7 +125,7 @@ def main():
     engine = SimulatorEngine(params)
 
     if args.calculate_metrics:
-        calculate_table1_metrics(train_log, test_log, engine)
+        simulate_process_with_metrics(engine, train_log, test_log)
     else:
         # test a simulation anyways, if metrics are not being calculated
         sim_log = simulate_process(engine, test_log)
