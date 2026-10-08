@@ -5,16 +5,19 @@ new log does not require another branch in the main simulation workflow.
 """
 
 import random
+import argparse
 from datetime import datetime, timezone
 import pm4py
 import pm4py.objects.log.importer.xes.importer as xes_importer
 from prosit import SimulatorEngine, SimulatorParameters
 from data_loader import *
+from table1metrics import calculate_table1_metrics, case_arrival_times
+from table4metrics import average_execution_time_entropy
 
 import os
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -22,69 +25,128 @@ warnings.filterwarnings("ignore")
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-# Specify which dataset to run the simulation on. Choose from the keys of `DATASETS`.
-DATASET = "p2p"
+N_SIM = {"none": 0, "fast": 1, "realistic": 5}  # number of simulation runs for each mode, realistic is the paper of the setting
 
-def print_param_details(params):
-    """Print the discovered simulator parameters for experiment inspection."""
-    # Resources discovered from the log
-    print(params.resources)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run a process simulation experiment.")
+    parser.add_argument(
+        "-d",
+        "--dataset",
+        choices=DATASETS,
+        required=True,
+        help="Dataset to simulate.",
+    )
+    parser.add_argument(
+        "-s",
+        "--simulations",
+        type=str,
+        default="none",
+        choices=N_SIM.keys(),
+        help="Simulation mode for the experiment.",
+    )
+    return parser.parse_args()
 
-    # Working calendar per resource (weekday -> hour -> bool)
-    print(params.calendars[params.resources[0]])
 
-    # Per-resource maximum concurrency (1 = no multitasking, >1 = multitasking)
-    print(params.max_concurrency)
+def simulate_process(engine, test_log, verbose=False):
+    sim_log = engine.apply(
+        n_traces=len(test_log),
+        t_start=datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    )
+    if verbose:
+        print(f"Simulated {len(sim_log)} events across {sim_log['case:concept:name'].nunique()} cases")
 
-    # Which resources can perform each activity
-    print(params.act_to_resources)
+    return sim_log
 
-    # Whether rules mode (Decision Trees) is active
-    print(params.rules_mode)
+def write_metrics_to_csv(metric_avg: dict, args, path: str = "metrics.csv") -> None:
+    """Append averaged metrics, run arguments, and a timestamp to a CSV file.
 
-    # Arrival time model (DecisionRules in rules mode, distribution tuple in no-rules mode)
-    print(params.arrival_time_distribution)
+    The result is one row per call: metrics, then args, then timestamp.
+    """
+    row = {
+        "timestamp": datetime.now().isoformat(),
+        **vars(args),
+        **metric_avg,
+    }
+    file_exists = os.path.exists(path)
+    pd.DataFrame([row]).to_csv(path, mode="a", header=not file_exists, index=False)
+    print(f"Metrics written to {path}")
 
-    # Execution time model per activity (DecisionRules or distribution tuple)
-    print(params.execution_time_distributions)
+def simulate_process_with_metrics(engine, test_log, args):
+    results = []
+    simulated_logs = []
 
-    # Waiting time model per resource (DecisionRules or distribution tuple)
-    print(params.waiting_time_distributions)
+    # Use the beginning of the TEST log as simulation start.
+    # This is important for CAR.
+    test_arrivals = case_arrival_times(test_log)
 
-    # Resource selection: flat dict {resource: DecisionRules|float}. One binary
-    # classifier per resource, trained on the events where the resource was
-    # eligible (activity's candidate pool). At simulation time, the engine first
-    # filters resources via `act_to_resources[activity]`, scores each enabled
-    # resource with its own tree, and samples proportionally.
-    print(params.resource_weights)
+    if len(test_arrivals) == 0:
+        raise ValueError("Could not determine test-log case arrival times.")
 
-    # Control flow model per transition (DecisionRules in rules mode, float frequency in no-rules)
-    print(params.transition_weights)
+    for run in range(N_SIM[args.simulations]):
 
-    # Case-level data attribute distribution (None if no attributes in log)
-    print(params.distribution_data_attributes)
-    # {'mode': 'empirical', 'data': {(val1, val2): frequency, ...}}
-    # or {'mode': 'distribution', 'data': {attr: {'type': 'categorical'|'continuous', ...}}}
+        print(f"\n========== Simulation {run + 1}/{N_SIM[args.simulations]} ==========")
+
+        # run simulation
+        sim_log = simulate_process(engine, test_log)
+
+        # Calculate the metrics
+        ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
+        # add table 2/3 metrics here
+        entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
+
+        result = {
+            "run": run + 1,
+            "NGD": ngd_value,
+            "CTD": ctd_value,
+            "CAR": car_value,
+            # add table 2/3 metrics here
+            "Execution Time Entropy": entropy_value
+        }
+        results.append(result)
+        simulated_logs.append(sim_log)
+
+    # Store results
+    metrics_df = pd.DataFrame(results)
+
+    averages = {
+        "NGD": metrics_df["NGD"].mean(),
+        "CTD": metrics_df["CTD"].mean(),
+        "CAR": metrics_df["CAR"].mean(),
+        #add table 2/3 metrics here
+        "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
+    }
+
+    write_metrics_to_csv(averages, args)
+
+
+    print("\n========== Average metrics ==========")
+    print(f"NGD: {averages['NGD']:.4f}")
+    print(f"CTD: {averages['CTD']:.2f}")
+    print(f"CAR: {averages['CAR']:.2f}")
+    print(f"Execution Time Entropy: {averages['Execution Time Entropy']:.4f}")
+
+    # Return
+    return {
+        "simulated_logs": simulated_logs,
+        "metrics": metrics_df,
+        "average_metrics": averages
+    }
 
 def main():
-    log = load_dataset(DATASET)
-    train_log, test_log = split_log(log)
+    args = parse_args()
+    log = load_dataset(args.dataset)
+    train_log, test_log = train_test_split(log, args.dataset)
 
     # Discover from training set
     net, im, fm = pm4py.discover_petri_net_inductive(train_log)
     params = SimulatorParameters(net, im, fm)
     params.discover_from_eventlog(train_log)
 
-    print_param_details(params)
-
     # Simulate the same number of cases as the test set
     engine = SimulatorEngine(params)
-    sim_log = engine.apply(
-        n_traces=len(test_log),
-        t_start=datetime(2024, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
-    )
 
-    print(f"Simulated {len(sim_log)} events across {sim_log['case:concept:name'].nunique()} cases")
+    if N_SIM[args.simulations] > 0:
+        simulate_process_with_metrics(engine, test_log, args)
 
 if __name__ == "__main__":
     main()

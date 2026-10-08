@@ -4,6 +4,17 @@ import numpy as np
 from collections import Counter
 from scipy.stats import wasserstein_distance
 
+def calculate_table1_metrics(test_log, sim_log):
+    ngd_value = ngd(test_log, sim_log, n=3)
+    print(f"NGD = {ngd_value:.4f}")
+
+    ctd_value = ctd(test_log, sim_log)
+    print(f"CTD = {ctd_value:.2f}")
+    
+    car_value = car(test_log, sim_log)
+    print(f"CAR = {car_value:.2f}")
+    return ngd_value, ctd_value, car_value
+
 def _get_case_id(event):
     """Get case ID from a PM4Py event or pandas row."""
     if isinstance(event, dict):
