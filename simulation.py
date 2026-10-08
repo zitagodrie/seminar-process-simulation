@@ -12,6 +12,7 @@ import pm4py.objects.log.importer.xes.importer as xes_importer
 from prosit import SimulatorEngine, SimulatorParameters
 from data_loader import *
 from table1metrics import calculate_table1_metrics, case_arrival_times
+from table3metrics import calculate_rule_metrics
 from table4metrics import average_execution_time_entropy
 
 import os
@@ -92,6 +93,7 @@ def simulate_process_with_metrics(engine, test_log, args):
         # Calculate the metrics
         ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
         # add table 2/3 metrics here
+        rule_metrics = calculate_rule_metrics(test_log, sim_log)
         entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
 
         result = {
@@ -99,6 +101,10 @@ def simulate_process_with_metrics(engine, test_log, args):
             "NGD": ngd_value,
             "CTD": ctd_value,
             "CAR": car_value,
+            "Rule-CFD": rule_metrics["Rule-CFD"],
+            "Rule-ATD": rule_metrics["Rule-ATD"],
+            "Rule-ETD": rule_metrics["Rule-ETD"],
+            "Rule-WTD": rule_metrics["Rule-WTD"],
             # add table 2/3 metrics here
             "Execution Time Entropy": entropy_value
         }
@@ -112,6 +118,10 @@ def simulate_process_with_metrics(engine, test_log, args):
         "NGD": metrics_df["NGD"].mean(),
         "CTD": metrics_df["CTD"].mean(),
         "CAR": metrics_df["CAR"].mean(),
+        "Rule-CFD": metrics_df["Rule-CFD"].mean(),
+        "Rule-ATD": metrics_df["Rule-ATD"].mean(),
+        "Rule-ETD": metrics_df["Rule-ETD"].mean(),
+        "Rule-WTD": metrics_df["Rule-WTD"].mean(),
         #add table 2/3 metrics here
         "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
     }
@@ -123,6 +133,10 @@ def simulate_process_with_metrics(engine, test_log, args):
     print(f"NGD: {averages['NGD']:.4f}")
     print(f"CTD: {averages['CTD']:.2f}")
     print(f"CAR: {averages['CAR']:.2f}")
+    print(f"Rule-CFD: {averages['Rule-CFD']:.2f}")
+    print(f"Rule-ATD: {averages['Rule-ATD']:.2f}")
+    print(f"Rule-ETD: {averages['Rule-ETD']:.2f}")
+    print(f"Rule-WTD: {averages['Rule-WTD']:.2f}")
     print(f"Execution Time Entropy: {averages['Execution Time Entropy']:.4f}")
 
     # Return
