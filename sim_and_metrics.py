@@ -10,6 +10,7 @@ from prosit import SimulatorEngine, SimulatorParameters
 
 from table1metrics import *
 from data_loader import *
+from table3metrics import *
 
 import os
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -121,11 +122,21 @@ def do_everything(dataset_name, n_simulations=1, random_seed=42):
         car_value = car(test_log, sim_log)
         print(f"CAR = {car_value:.2f}")
 
+        rule_results = calculate_rule_metrics(test_log, sim_log, params)
+
+        print("\nRule metrics:")
+        for metric, value in rule_results.items():
+            print(f"{metric}: {value:.4f}")
+
         result = {
             "run": run + 1,
             "NGD": ngd_value,
             "CTD": ctd_value,
-            "CAR": car_value
+            "CAR": car_value,
+            "Rule-CFD": rule_results["Rule-CFD"],
+            "Rule-ATD": rule_results["Rule-ATD"],
+            "Rule-ETD": rule_results["Rule-ETD"],
+            "Rule-WTD": rule_results["Rule-WTD"]
         }
         results.append(result)
         simulated_logs.append(sim_log)
@@ -136,13 +147,21 @@ def do_everything(dataset_name, n_simulations=1, random_seed=42):
     averages = {
         "NGD": metrics_df["NGD"].mean(),
         "CTD": metrics_df["CTD"].mean(),
-        "CAR": metrics_df["CAR"].mean()
+        "CAR": metrics_df["CAR"].mean(),
+        "Rule-CFD": metrics_df["Rule-CFD"].mean(),
+        "Rule-ATD": metrics_df["Rule-ATD"].mean(),
+        "Rule-ETD": metrics_df["Rule-ETD"].mean(),
+        "Rule-WTD": metrics_df["Rule-WTD"].mean()
     }
 
     print("\n========== Average metrics ==========")
     print(f"NGD: {averages['NGD']:.4f}")
     print(f"CTD: {averages['CTD']:.2f}")
     print(f"CAR: {averages['CAR']:.2f}")
+    print(f"Rule-CFD: {averages['Rule-CFD']:.4f}")
+    print(f"Rule-ATD: {averages['Rule-ATD']:.4f}")
+    print(f"Rule-ETD: {averages['Rule-ETD']:.4f}")
+    print(f"Rule-WTD: {averages['Rule-WTD']:.4f}")
 
     # Return
     return {
@@ -153,3 +172,5 @@ def do_everything(dataset_name, n_simulations=1, random_seed=42):
         "train_log": train_log,
         "test_log": test_log
     }
+
+do_everything("cvs", n_simulations=1, random_seed=42)
