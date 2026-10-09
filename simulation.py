@@ -6,12 +6,12 @@ new log does not require another branch in the main simulation workflow.
 
 import random
 import argparse
+import pandas as pd
 from datetime import datetime, timezone
 import pm4py
-import pm4py.objects.log.importer.xes.importer as xes_importer
 from prosit import SimulatorEngine, SimulatorParameters
-from data_loader import *
-from table1metrics import calculate_table1_metrics, case_arrival_times
+from data_loader import DATASETS, load_dataset, train_test_split
+from table2metrics import calculate_table2_metrics, case_arrival_times
 from table3metrics import calculate_rule_metrics
 from table4metrics import average_execution_time_entropy
 
@@ -26,7 +26,7 @@ warnings.filterwarnings("ignore")
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-N_SIM = {"none": 0, "fast": 1, "realistic": 5}  # number of simulation runs for each mode, realistic is the paper of the setting
+N_SIM = {"none": 0, "fast": 1, "realistic": 5}  # number of simulation runs for each mode, realistic is the setting of the paper
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run a process simulation experiment.")
@@ -72,16 +72,16 @@ def write_metrics_to_csv(metric_avg: dict, args, path: str = "metrics.csv") -> N
     pd.DataFrame([row]).to_csv(path, mode="a", header=not file_exists, index=False)
     print(f"Metrics written to {path}")
 
-def simulate_process_with_metrics(engine, test_log, args):
+def simulate_process_with_metrics(engine, test_log, params, args):
     results = []
     simulated_logs = []
 
-    # Use the beginning of the TEST log as simulation start.
-    # This is important for CAR.
-    test_arrivals = case_arrival_times(test_log)
+    # # Use the beginning of the TEST log as simulation start.
+    # # This is important for CAR.
+    # test_arrivals = case_arrival_times(test_log)
 
-    if len(test_arrivals) == 0:
-        raise ValueError("Could not determine test-log case arrival times.")
+    # if len(test_arrivals) == 0:
+    #     raise ValueError("Could not determine test-log case arrival times.")
 
     for run in range(N_SIM[args.simulations]):
 
@@ -91,9 +91,8 @@ def simulate_process_with_metrics(engine, test_log, args):
         sim_log = simulate_process(engine, test_log)
 
         # Calculate the metrics
-        ngd_value, ctd_value, car_value = calculate_table1_metrics(test_log, sim_log)
-        # add table 2/3 metrics here
-        rule_metrics = calculate_rule_metrics(test_log, sim_log)
+        ngd_value, ctd_value, car_value = calculate_table2_metrics(test_log, sim_log)
+        rule_metrics = calculate_rule_metrics(test_log, sim_log, params)
         entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
 
         result = {
@@ -105,7 +104,6 @@ def simulate_process_with_metrics(engine, test_log, args):
             "Rule-ATD": rule_metrics["Rule-ATD"],
             "Rule-ETD": rule_metrics["Rule-ETD"],
             "Rule-WTD": rule_metrics["Rule-WTD"],
-            # add table 2/3 metrics here
             "Execution Time Entropy": entropy_value
         }
         results.append(result)
@@ -122,7 +120,6 @@ def simulate_process_with_metrics(engine, test_log, args):
         "Rule-ATD": metrics_df["Rule-ATD"].mean(),
         "Rule-ETD": metrics_df["Rule-ETD"].mean(),
         "Rule-WTD": metrics_df["Rule-WTD"].mean(),
-        #add table 2/3 metrics here
         "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
     }
 
@@ -160,7 +157,7 @@ def main():
     engine = SimulatorEngine(params)
 
     if N_SIM[args.simulations] > 0:
-        simulate_process_with_metrics(engine, test_log, args)
+        simulate_process_with_metrics(engine, test_log, params, args)
 
 if __name__ == "__main__":
     main()

@@ -4,7 +4,7 @@ import numpy as np
 from collections import Counter
 from scipy.stats import wasserstein_distance
 
-def calculate_table1_metrics(test_log, sim_log):
+def calculate_table2_metrics(test_log, sim_log):
     ngd_value = ngd(test_log, sim_log, n=3)
     print(f"NGD = {ngd_value:.4f}")
 
