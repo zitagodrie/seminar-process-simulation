@@ -58,6 +58,15 @@ def simulate_process(engine, test_log, verbose=False):
 
     return sim_log
 
+
+def make_bpmn_boundary_transitions_silent(net):
+    """Prevent BPMN start/end markers from being treated as activities."""
+    for transition in net.transitions:
+        if transition.label in {"Start", "End"}:
+            transition.label = None
+
+    return net
+
 def write_metrics_to_csv(metric_avg: dict, args, path: str = "metrics.csv") -> None:
     """Append averaged metrics, run arguments, and a timestamp to a CSV file.
 
@@ -152,8 +161,16 @@ def main():
     log = load_dataset(args.dataset)
     train_log, test_log = train_test_split(log, args.dataset)
 
-    # Discover from training set
-    net, im, fm = pm4py.discover_petri_net_inductive(train_log)
+    # load bpmn if available and convert to Petri net, otherwise discover Petri net from training log
+    if DATASETS[args.dataset].pm_path is not None:
+        bpmn_path = DATASETS[args.dataset].pm_path
+        if os.path.exists(bpmn_path):
+            net, im, fm = pm4py.convert_to_petri_net(pm4py.read_bpmn(bpmn_path))
+            net = make_bpmn_boundary_transitions_silent(net)
+        else:
+            print(f"Warning: BPMN file {bpmn_path} not found. Using discovered Petri net instead.")
+            net, im, fm = pm4py.discover_petri_net_inductive(train_log)
+
     params = SimulatorParameters(net, im, fm)
     params.discover_from_eventlog(train_log)
 

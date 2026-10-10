@@ -11,6 +11,7 @@ class DatasetConfig:
     """Describe how one XES dataset should be loaded and normalized."""
 
     path: str
+    pm_path: str | None = None
     split_from_file: bool = False
     resource_feature: str | None = None
     activity_feature: str = "Activity"
@@ -19,26 +20,31 @@ class DatasetConfig:
 DATASETS = {
     "cvs": DatasetConfig(
         "data/CVS/cvs_pharmacy.xes",
+        pm_path="bpmn/cvs_pharmacy/cvs_pharmacy.bpmn",
         resource_feature="org:resource",
         activity_feature="concept:name",
     ),
     "bpi2012": DatasetConfig(
-        "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes", 
+        "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes",
+        pm_path="bpmn/BPI_Challenge_2012_W_Two_TS/BPI_Challenge_2012_W_Two_TS.bpmn",
         split_from_file=True,
         resource_feature="Resource"
     ),
     "bpi2017": DatasetConfig(
-        "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes", 
+        "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes",
+        pm_path="bpmn/BPI_Challenge_2017_W_Two_TS/BPI_Challenge_2017_W_Two_TS.bpmn", 
         split_from_file=True,
         resource_feature="Resource"
     ),
     "acr": DatasetConfig(
-        "data/ACR/ConsultaDataMining201618.xes", 
+        "data/ACR/ConsultaDataMining201618.xes",
+        pm_path="bpmn/ConsultaDataMining201618/ConsultaDataMining201618.bpmn",
         split_from_file=True,
         normalize_resource_names=True,
     ),
     "p2p": DatasetConfig(
         "data/P2P/PurchasingExample.xes",
+        pm_path="bpmn/PurchasingExample/PurchasingExample.bpmn",
         split_from_file=True,
     ),
 }
