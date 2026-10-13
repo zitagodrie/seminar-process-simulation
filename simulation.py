@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import pm4py
 from prosit import SimulatorEngine, SimulatorParameters
 from data_loader import DATASETS, load_dataset, train_test_split
-from table2metrics import calculate_table2_metrics, case_arrival_times
+from table2metrics import calculate_table2_metrics, case_arrival_times, prepare_log
 from table3metrics import calculate_rule_metrics
 from table4metrics import average_execution_time_entropy
 
@@ -83,6 +83,9 @@ def simulate_process_with_metrics(engine, test_log, params, args):
     # if len(test_arrivals) == 0:
     #     raise ValueError("Could not determine test-log case arrival times.")
 
+    # The test log is the same for every run, so convert it only once.
+    test_frame = prepare_log(test_log)
+
     for run in range(N_SIM[args.simulations]):
 
         print(f"\n========== Simulation {run + 1}/{N_SIM[args.simulations]} ==========")
@@ -91,7 +94,7 @@ def simulate_process_with_metrics(engine, test_log, params, args):
         sim_log = simulate_process(engine, test_log)
 
         # Calculate the metrics
-        ngd_value, ctd_value, car_value = calculate_table2_metrics(test_log, sim_log)
+        ngd_value, ctd_value, car_value = calculate_table2_metrics(test_log, sim_log, test_frame=test_frame)
         rule_metrics = calculate_rule_metrics(test_log, sim_log, params)
         entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
 

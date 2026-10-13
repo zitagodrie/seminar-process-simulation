@@ -12,9 +12,18 @@ _START = "_start"
 _END = "_end"
 
 
-def calculate_table2_metrics(test_log, sim_log):
+def prepare_log(log):
+    """
+    Precompute the event frame of a log, e.g. the test log, so it can be
+    reused across simulation runs via calculate_table2_metrics(test_frame=...).
+    """
+    return _event_frame(log)
+
+
+def calculate_table2_metrics(test_log, sim_log, test_frame=None):
     # Normalise each log once and reuse it for all three metrics.
-    test_frame = _event_frame(test_log)
+    if test_frame is None:
+        test_frame = _event_frame(test_log)
     sim_frame = _event_frame(sim_log)
 
     ngd_value = _ngd(test_frame, sim_frame, n=3)
