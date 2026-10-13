@@ -85,13 +85,6 @@ def simulate_process_with_metrics(engine, test_log, params, args):
     results = []
     simulated_logs = []
 
-    # # Use the beginning of the TEST log as simulation start.
-    # # This is important for CAR.
-    # test_arrivals = case_arrival_times(test_log)
-
-    # if len(test_arrivals) == 0:
-    #     raise ValueError("Could not determine test-log case arrival times.")
-
     # The test log is the same for every run, so convert it only once.
     test_frame = prepare_log(test_log)
     test_rule_data = prepare_rule_data(test_log, params)
@@ -101,7 +94,9 @@ def simulate_process_with_metrics(engine, test_log, params, args):
         print(f"\n========== Simulation {run + 1}/{N_SIM[args.simulations]} ==========")
 
         # run simulation
-        sim_log = simulate_process(engine, test_log)
+        t_start = case_arrival_times(test_log).min().to_pydatetime()
+        sim_log = engine.apply(n_traces=len(test_log), t_start=t_start)
+
 
         # Calculate the metrics
         ngd_value, ctd_value, car_value = calculate_table2_metrics(test_log, sim_log, test_frame=test_frame)
