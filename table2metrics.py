@@ -225,15 +225,16 @@ def _case_cycle_times_from_frame(frame):
     grouped = frame.groupby(CASE_COL)
     cycle_times = (grouped[_END].max() - grouped[_START].min()).dropna()
 
-    return cycle_times.dt.total_seconds().to_numpy(dtype=float)
+    # The paper bins cycle times into complete hours (floor operator).
+    return np.floor(cycle_times.dt.total_seconds().to_numpy(dtype=float) / 3600)
 
 
 def _case_cycle_times(log):
     """
-    Extract end-to-end cycle times in seconds.
+    Extract end-to-end cycle times in complete hours.
 
     For each case:
-        cycle time = latest end timestamp - earliest start timestamp
+        cycle time = floor(latest end timestamp - earliest start timestamp)
 
     Works with:
       - PM4Py EventLog
