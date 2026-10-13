@@ -71,11 +71,25 @@ def _build_case_attributes_from_log(trace, params):
 
     We use params.label_data_attributes, which is the same collection
     passed into Prosit's feature-building/discovery code.
+
+    Categorical attributes are one-hot encoded as "<attr> = <value>",
+    exactly like Prosit's discovery and simulator.
     """
-    return _case_attributes(
+    attributes = _case_attributes(
         trace,
         getattr(params, "label_data_attributes", [])
     )
+
+    categorical = getattr(params, "label_data_attributes_categorical", [])
+    values = getattr(params, "attribute_values_label_categorical", {})
+
+    for attr in categorical:
+        value = attributes.pop(attr, None)
+
+        for v in values.get(attr, []):
+            attributes[attr + " = " + str(v)] = int(value == v)
+
+    return attributes
 
 
 def _get_resource(event):

@@ -14,7 +14,7 @@ class DatasetConfig:
     pm_path: str | None = None
     split_from_file: bool = False
     resource_feature: str | None = None
-    activity_feature: str = "Activity"
+    activity_feature: str = "concept:name"
     normalize_resource_names: bool = False
 
 DATASETS = {
@@ -22,19 +22,18 @@ DATASETS = {
         "data/CVS/cvs_pharmacy.xes",
         pm_path="bpmn/cvs_pharmacy/cvs_pharmacy.bpmn",
         resource_feature="org:resource",
-        activity_feature="concept:name",
     ),
     "bpi2012": DatasetConfig(
         "data/BPI Challenge 2012/BPI_Challenge_2012_W_Two_TS.xes",
         pm_path="bpmn/BPI_Challenge_2012_W_Two_TS/BPI_Challenge_2012_W_Two_TS.bpmn",
         split_from_file=True,
-        resource_feature="Resource"
+        resource_feature="org:resource",
     ),
     "bpi2017": DatasetConfig(
         "data/BPI Challenge 2017/BPI_Challenge_2017_W_Two_TS.xes",
         pm_path="bpmn/BPI_Challenge_2017_W_Two_TS/BPI_Challenge_2017_W_Two_TS.bpmn", 
         split_from_file=True,
-        resource_feature="Resource"
+        resource_feature="org:resource",
     ),
     "acr": DatasetConfig(
         "data/ACR/ConsultaDataMining201618.xes",
@@ -121,6 +120,27 @@ def clean_timestamp_features(log):
     return log
 
 
+def drop_disco_duplicates(log):
+    """Remove attributes that Fluxicon Disco adds to its XES exports."""
+    # Disco copies concept:name/org:resource into "Activity"/"Resource" and
+    # adds "variant", "variant-index" and "creator" trace attributes. Prosit
+    # would treat all of them as case attributes: the duplicates are taken
+    # from the first event only, and the variant leaks the whole control-flow
+    # path of the case into the decision rules. The CVS log has the same
+    # problem with its "case:variant" and constant "LogType" trace attributes.
+    event_duplicates = ("Activity", "Resource")
+    trace_metadata = ("variant", "variant-index", "creator", "case:variant", "LogType")
+
+    for trace in log:
+        for attribute in trace_metadata:
+            trace.attributes.pop(attribute, None)
+        for event in trace:
+            for attribute in event_duplicates:
+                if attribute in event:
+                    del event[attribute]
+    return log
+
+
 def normalize_resource_names(log):
     """Prefix ACR resource names that are actually activity names."""
     activity_names = {
@@ -159,6 +179,7 @@ def load_dataset(dataset_name):
     config = DATASETS[dataset_name]
     log = xes_importer.apply(config.path)
     log = clean_timestamp_features(log)
+    log = drop_disco_duplicates(log)
     if config.normalize_resource_names:
         log = normalize_resource_names(log)
     if config.resource_feature:
