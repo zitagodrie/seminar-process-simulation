@@ -12,7 +12,7 @@ import pm4py
 from prosit import SimulatorEngine, SimulatorParameters
 from data_loader import DATASETS, load_dataset, train_test_split
 from table2metrics import calculate_table2_metrics, case_arrival_times, prepare_log
-from table3metrics import calculate_rule_metrics
+from table3metrics import calculate_rule_metrics, prepare_rule_data
 from table4metrics import average_execution_time_entropy
 
 import os
@@ -85,6 +85,7 @@ def simulate_process_with_metrics(engine, test_log, params, args):
 
     # The test log is the same for every run, so convert it only once.
     test_frame = prepare_log(test_log)
+    test_rule_data = prepare_rule_data(test_log, params)
 
     for run in range(N_SIM[args.simulations]):
 
@@ -95,7 +96,7 @@ def simulate_process_with_metrics(engine, test_log, params, args):
 
         # Calculate the metrics
         ngd_value, ctd_value, car_value = calculate_table2_metrics(test_log, sim_log, test_frame=test_frame)
-        rule_metrics = calculate_rule_metrics(test_log, sim_log, params)
+        rule_metrics = calculate_rule_metrics(test_log, sim_log, params, real_data=test_rule_data)
         entropy_value = average_execution_time_entropy(sim_log, activity_col=DATASETS[args.dataset].activity_feature)
 
         result = {

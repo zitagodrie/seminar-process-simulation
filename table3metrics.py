@@ -13,6 +13,8 @@ def _event_timestamp(event, key):
     value = event.get(key)
     if value is None:
         return None
+    if isinstance(value, pd.Timestamp):
+        return value
     return pd.Timestamp(value)
 
 
@@ -158,23 +160,29 @@ def _simlog_to_traces(sim_log):
         time:timestamp
         + label attributes
     """
+    case_col = "case:concept:name"
+
+    # Sort events by case (in order of first appearance) and then by
+    # start/end time, so every case becomes one contiguous block.
+    case_order = pd.factorize(sim_log[case_col])[0]
+    order = (
+        pd.DataFrame({
+            "case": case_order,
+            "start": sim_log["start:timestamp"].to_numpy(),
+            "end": sim_log["time:timestamp"].to_numpy(),
+        })
+        .sort_values(["case", "start", "end"], kind="stable")
+        .index
+    )
+
+    records = sim_log.iloc[order].to_dict("records")
+    sizes = np.bincount(case_order)
+
     traces = []
-
-    for case_id, group in sim_log.groupby(
-        "case:concept:name",
-        sort=False
-    ):
-        group = group.sort_values(
-            ["start:timestamp", "time:timestamp"]
-        )
-
-        trace = []
-
-        for _, row in group.iterrows():
-            event = row.to_dict()
-            trace.append(event)
-
-        traces.append(trace)
+    offset = 0
+    for size in sizes:
+        traces.append(records[offset:offset + size])
+        offset += size
 
     return traces
 
@@ -238,7 +246,60 @@ def _transition_features(trace, event_index, params):
     return attributes | history
 
 
-def _execution_features(trace, event_index, params):
+def _iter_event_contexts(trace, params):
+    """
+    Yield (event, case attributes, history before the event) for every
+    event in a trace.
+
+    The case attributes are computed once per trace and the history is
+    updated incrementally, instead of rescanning the trace for every event.
+    The yielded history dict is reused, so callers must not keep it.
+    """
+    attributes = _build_case_attributes_from_log(trace, params)
+
+    history = {
+        activity: 0
+        for activity in params.net_transition_labels
+    }
+
+    for event in trace:
+        yield event, attributes, history
+
+        activity = event.get("concept:name")
+
+        if activity in history:
+            history[activity] += 1
+
+
+def _one_hot(cache, value, labels, prefix):
+    """Return a (cached) one-hot dict of ``value`` over ``labels``."""
+    try:
+        return cache[value]
+    except KeyError:
+        encoding = {
+            prefix + label: int(label == value)
+            for label in labels
+        }
+        cache[value] = encoding
+        return encoding
+    except TypeError:
+        # Unhashable value: do not cache.
+        return {
+            prefix + label: int(label == value)
+            for label in labels
+        }
+
+
+def _event_start(event):
+    start = _event_timestamp(event, "start:timestamp")
+
+    if start is None:
+        start = _event_timestamp(event, "time:timestamp")
+
+    return start
+
+
+def _execution_features(event, attributes, history, params, cache):
     """
     Features used by Prosit's execution-time decision tree.
 
@@ -249,35 +310,21 @@ def _execution_features(trace, event_index, params):
         case attributes
         case history
     """
-    event = trace[event_index]
-
     resource = _get_resource(event)
 
-    features = {
-        "resource = " + r: int(r == resource)
-        for r in params.resources
-    }
+    features = dict(
+        _one_hot(cache, resource, params.resources, "resource = ")
+    )
 
-    start = _event_timestamp(event, "start:timestamp")
-
-    if start is None:
-        start = _event_timestamp(event, "time:timestamp")
+    start = _event_start(event)
 
     features["hour"] = start.hour
     features["weekday"] = start.weekday()
 
-    attributes = _build_case_attributes_from_log(trace, params)
-
-    history = _activity_history_before_event(
-        trace,
-        event_index,
-        params.net_transition_labels
-    )
-
     return features | attributes | history
 
 
-def _waiting_features(trace, event_index, params):
+def _waiting_features(event, attributes, history, params, cache):
     """
     Features used by Prosit's waiting-time decision tree.
 
@@ -294,14 +341,9 @@ def _waiting_features(trace, event_index, params):
         workload
         queue_length
     """
-    event = trace[event_index]
-
     activity = event.get("concept:name")
 
-    start = _event_timestamp(event, "start:timestamp")
-
-    if start is None:
-        start = _event_timestamp(event, "time:timestamp")
+    start = _event_start(event)
 
     features = {
         "hour": start.hour,
@@ -309,15 +351,13 @@ def _waiting_features(trace, event_index, params):
     }
 
     # Prosit's one-hot waiting activity vector
-    for act in params.net_transition_labels:
-        features["waiting_activity = " + act] = int(act == activity)
-
-    attributes = _build_case_attributes_from_log(trace, params)
-
-    history = _activity_history_before_event(
-        trace,
-        event_index,
-        params.net_transition_labels
+    features.update(
+        _one_hot(
+            cache,
+            activity,
+            params.net_transition_labels,
+            "waiting_activity = "
+        )
     )
 
     features = features | attributes | history
@@ -377,6 +417,19 @@ def _check_features_available(decision_rules, features):
     available = set(features.keys())
 
     return required - available
+
+
+def _missing_features(required_cache, decision_rules, features):
+    """
+    Like _check_features_available, but caches the tree's required
+    features so they are not recomputed for every event.
+    """
+    key = id(decision_rules)
+
+    if key not in required_cache:
+        required_cache[key] = _tree_features(decision_rules)
+
+    return required_cache[key].difference(features)
 
 
 # ============================================================
@@ -445,10 +498,12 @@ def _collect_execution_rule_data(log, params):
     execution-time decision tree.
     """
     result = defaultdict(lambda: defaultdict(list))
+    one_hot_cache = {}
+    required_cache = {}
 
     for trace in log:
 
-        for i, event in enumerate(trace):
+        for event, attributes, history in _iter_event_contexts(trace, params):
 
             activity = event.get("concept:name")
 
@@ -465,12 +520,15 @@ def _collect_execution_rule_data(log, params):
             )
 
             features = _execution_features(
-                trace,
-                i,
-                params
+                event,
+                attributes,
+                history,
+                params,
+                one_hot_cache
             )
 
-            missing = _check_features_available(
+            missing = _missing_features(
+                required_cache,
                 decision_rules,
                 features
             )
@@ -503,10 +561,12 @@ def _collect_waiting_rule_data(log, params):
     waiting-time decision tree.
     """
     result = defaultdict(lambda: defaultdict(list))
+    one_hot_cache = {}
+    required_cache = {}
 
     for trace in log:
 
-        for i, event in enumerate(trace):
+        for event, attributes, history in _iter_event_contexts(trace, params):
 
             resource = _get_resource(event)
 
@@ -523,12 +583,15 @@ def _collect_waiting_rule_data(log, params):
             )
 
             features = _waiting_features(
-                trace,
-                i,
-                params
+                event,
+                attributes,
+                history,
+                params,
+                one_hot_cache
             )
 
-            missing = _check_features_available(
+            missing = _missing_features(
+                required_cache,
                 decision_rules,
                 features
             )
@@ -601,137 +664,7 @@ def _average_leaf_wasserstein(real_data, sim_data):
 
 
 # ============================================================
-# RULE-ATD
-# ============================================================
-
-def rule_atd(real_log, sim_log, params):
-    """
-    Rule-ATD:
-    Wasserstein distance between real and simulated
-    inter-arrival-time distributions at decision-tree leaves.
-    """
-    real_data = _collect_arrival_rule_data(
-        real_log,
-        params
-    )
-
-    sim_traces = _simlog_to_traces(sim_log)
-
-    sim_data = _collect_arrival_rule_data(
-        sim_traces,
-        params
-    )
-
-    return _average_leaf_wasserstein(
-        real_data,
-        sim_data
-    )
-
-
-# ============================================================
-# RULE-ETD
-# ============================================================
-
-def rule_etd(real_log, sim_log, params):
-    """
-    Rule-ETD:
-    Wasserstein distance between real and simulated
-    execution-time distributions at decision-tree leaves.
-
-    Distances are calculated separately for every activity
-    and leaf, then averaged.
-    """
-    real_data = _collect_execution_rule_data(
-        real_log,
-        params
-    )
-
-    sim_traces = _simlog_to_traces(sim_log)
-
-    sim_data = _collect_execution_rule_data(
-        sim_traces,
-        params
-    )
-
-    distances = []
-
-    common_activities = (
-        set(real_data) & set(sim_data)
-    )
-
-    for activity in common_activities:
-
-        distances.append(
-            _average_leaf_wasserstein(
-                real_data[activity],
-                sim_data[activity]
-            )
-        )
-
-    distances = [
-        d for d in distances
-        if not np.isnan(d)
-    ]
-
-    if not distances:
-        return np.nan
-
-    return float(np.mean(distances))
-
-
-# ============================================================
-# RULE-WTD
-# ============================================================
-
-def rule_wtd(real_log, sim_log, params):
-    """
-    Rule-WTD:
-    Wasserstein distance between real and simulated
-    waiting-time distributions at decision-tree leaves.
-
-    Distances are calculated separately for every resource
-    and leaf, then averaged.
-    """
-    real_data = _collect_waiting_rule_data(
-        real_log,
-        params
-    )
-
-    sim_traces = _simlog_to_traces(sim_log)
-
-    sim_data = _collect_waiting_rule_data(
-        sim_traces,
-        params
-    )
-
-    distances = []
-
-    common_resources = (
-        set(real_data) & set(sim_data)
-    )
-
-    for resource in common_resources:
-
-        distances.append(
-            _average_leaf_wasserstein(
-                real_data[resource],
-                sim_data[resource]
-            )
-        )
-
-    distances = [
-        d for d in distances
-        if not np.isnan(d)
-    ]
-
-    if not distances:
-        return np.nan
-
-    return float(np.mean(distances))
-
-
-# ============================================================
-# RULE-CFD
+# RULE DATA (collected once per log)
 # ============================================================
 
 def _transition_firing_counts(log, params):
@@ -779,27 +712,140 @@ def _transition_firing_frequencies(log, params):
     }
 
 
-def rule_cfd(real_log, sim_log, params):
-    """
-    Rule-CFD:
+def _as_traces(log):
+    """Prosit's pandas output is converted to traces; EventLogs are used as is."""
+    if isinstance(log, pd.DataFrame):
+        return _simlog_to_traces(log)
+    return log
 
-        sum over transitions of
-        |real firing frequency - simulated firing frequency|
 
-    We use activity labels because ordinary XES event logs do not
-    retain Prosit's internal Petri-net transition identity.
+def prepare_rule_data(log, params):
     """
-    real_freq = _transition_firing_frequencies(
-        real_log,
-        params
+    Collect everything the four rule metrics need from one log.
+
+    The result for the test log is the same for every simulation run,
+    so it can be computed once and passed to calculate_rule_metrics
+    via real_data=...
+    """
+    traces = _as_traces(log)
+
+    return {
+        "CFD": _transition_firing_frequencies(traces, params),
+        "ATD": _collect_arrival_rule_data(traces, params),
+        "ETD": _collect_execution_rule_data(traces, params),
+        "WTD": _collect_waiting_rule_data(traces, params),
+    }
+
+
+# ============================================================
+# RULE-ATD
+# ============================================================
+
+def _rule_atd(real_data, sim_data):
+    return _average_leaf_wasserstein(
+        real_data["ATD"],
+        sim_data["ATD"]
     )
 
-    sim_traces = _simlog_to_traces(sim_log)
 
-    sim_freq = _transition_firing_frequencies(
-        sim_traces,
-        params
+def rule_atd(real_log, sim_log, params):
+    """
+    Rule-ATD:
+    Wasserstein distance between real and simulated
+    inter-arrival-time distributions at decision-tree leaves.
+    """
+    return _rule_atd(
+        {"ATD": _collect_arrival_rule_data(_as_traces(real_log), params)},
+        {"ATD": _collect_arrival_rule_data(_as_traces(sim_log), params)},
     )
+
+
+# ============================================================
+# RULE-ETD / RULE-WTD
+# ============================================================
+
+def _average_grouped_leaf_wasserstein(real_data, sim_data):
+    """
+    Average of the per-group (activity or resource) average
+    leaf Wasserstein distances.
+    """
+    distances = []
+
+    common_groups = (
+        set(real_data) & set(sim_data)
+    )
+
+    for group in common_groups:
+
+        distances.append(
+            _average_leaf_wasserstein(
+                real_data[group],
+                sim_data[group]
+            )
+        )
+
+    distances = [
+        d for d in distances
+        if not np.isnan(d)
+    ]
+
+    if not distances:
+        return np.nan
+
+    return float(np.mean(distances))
+
+
+def _rule_etd(real_data, sim_data):
+    return _average_grouped_leaf_wasserstein(
+        real_data["ETD"],
+        sim_data["ETD"]
+    )
+
+
+def rule_etd(real_log, sim_log, params):
+    """
+    Rule-ETD:
+    Wasserstein distance between real and simulated
+    execution-time distributions at decision-tree leaves.
+
+    Distances are calculated separately for every activity
+    and leaf, then averaged.
+    """
+    return _rule_etd(
+        {"ETD": _collect_execution_rule_data(_as_traces(real_log), params)},
+        {"ETD": _collect_execution_rule_data(_as_traces(sim_log), params)},
+    )
+
+
+def _rule_wtd(real_data, sim_data):
+    return _average_grouped_leaf_wasserstein(
+        real_data["WTD"],
+        sim_data["WTD"]
+    )
+
+
+def rule_wtd(real_log, sim_log, params):
+    """
+    Rule-WTD:
+    Wasserstein distance between real and simulated
+    waiting-time distributions at decision-tree leaves.
+
+    Distances are calculated separately for every resource
+    and leaf, then averaged.
+    """
+    return _rule_wtd(
+        {"WTD": _collect_waiting_rule_data(_as_traces(real_log), params)},
+        {"WTD": _collect_waiting_rule_data(_as_traces(sim_log), params)},
+    )
+
+
+# ============================================================
+# RULE-CFD
+# ============================================================
+
+def _rule_cfd(real_data, sim_data):
+    real_freq = real_data["CFD"]
+    sim_freq = sim_data["CFD"]
 
     all_activities = (
         set(real_freq) | set(sim_freq)
@@ -817,36 +863,41 @@ def rule_cfd(real_log, sim_log, params):
     )
 
 
+def rule_cfd(real_log, sim_log, params):
+    """
+    Rule-CFD:
+
+        sum over transitions of
+        |real firing frequency - simulated firing frequency|
+
+    We use activity labels because ordinary XES event logs do not
+    retain Prosit's internal Petri-net transition identity.
+    """
+    return _rule_cfd(
+        {"CFD": _transition_firing_frequencies(_as_traces(real_log), params)},
+        {"CFD": _transition_firing_frequencies(_as_traces(sim_log), params)},
+    )
+
+
 # ============================================================
 # ALL FOUR RULE METRICS
 # ============================================================
 
-def calculate_rule_metrics(real_log, sim_log, params):
+def calculate_rule_metrics(real_log, sim_log, params, real_data=None):
     """
     Calculate all four DBPS rule-level metrics.
+
+    Pass real_data=prepare_rule_data(real_log, params) to reuse the
+    test-log data across simulation runs.
     """
+    if real_data is None:
+        real_data = prepare_rule_data(real_log, params)
+
+    sim_data = prepare_rule_data(sim_log, params)
+
     return {
-        "Rule-CFD": rule_cfd(
-            real_log,
-            sim_log,
-            params
-        ),
-
-        "Rule-ATD": rule_atd(
-            real_log,
-            sim_log,
-            params
-        ),
-
-        "Rule-ETD": rule_etd(
-            real_log,
-            sim_log,
-            params
-        ),
-
-        "Rule-WTD": rule_wtd(
-            real_log,
-            sim_log,
-            params
-        ),
+        "Rule-CFD": _rule_cfd(real_data, sim_data),
+        "Rule-ATD": _rule_atd(real_data, sim_data),
+        "Rule-ETD": _rule_etd(real_data, sim_data),
+        "Rule-WTD": _rule_wtd(real_data, sim_data),
     }
