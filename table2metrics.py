@@ -1,39 +1,97 @@
 import pandas as pd
 import numpy as np
 
-from collections import Counter
 from scipy.stats import wasserstein_distance
 
+CASE_COL = "case:concept:name"
+ACTIVITY_COL = "concept:name"
+
+# Internal column names of the normalised event frame.
+_ORDER = "_order"
+_START = "_start"
+_END = "_end"
+
+
 def calculate_table2_metrics(test_log, sim_log):
-    ngd_value = ngd(test_log, sim_log, n=3)
+    # Normalise each log once and reuse it for all three metrics.
+    test_frame = _event_frame(test_log)
+    sim_frame = _event_frame(sim_log)
+
+    ngd_value = _ngd(test_frame, sim_frame, n=3)
     print(f"NGD = {ngd_value:.4f}")
 
-    ctd_value = ctd(test_log, sim_log)
+    ctd_value = _ctd(test_frame, sim_frame)
     print(f"CTD = {ctd_value:.2f}")
-    
-    car_value = car(test_log, sim_log)
+
+    car_value = _car(test_frame, sim_frame)
     print(f"CAR = {car_value:.2f}")
     return ngd_value, ctd_value, car_value
 
-def _get_case_id(event):
-    """Get case ID from a PM4Py event or pandas row."""
-    if isinstance(event, dict):
-        return event.get("case:concept:name")
-    return event["case:concept:name"]
+
+def _first_present(columns, candidates):
+    return next((c for c in candidates if c in columns), None)
 
 
-def _get_activity(event):
-    """Get activity name from a PM4Py event or pandas row."""
-    if isinstance(event, dict):
-        return event.get("concept:name")
-    return event["concept:name"]
+def _event_frame(log):
+    """
+    Convert a log into one flat DataFrame with the columns:
+
+      - case:concept:name  case identifier
+      - concept:name       activity
+      - _order             timestamp used to order events within a case
+      - _start / _end      start and end timestamp of the event
+
+    Supports:
+      - PM4Py EventLog
+      - pandas DataFrame
+
+    All metrics are computed with vectorised pandas/numpy operations on
+    this frame instead of Python loops over cases and events.
+    """
+
+    if isinstance(log, pd.DataFrame):
+        cols = log.columns
+        order_col = _first_present(
+            cols, ["time:timestamp", "start_timestamp", "start:timestamp"]
+        )
+        start_col = _first_present(
+            cols, ["start:timestamp", "start_timestamp", "time:timestamp"]
+        )
+        end_col = _first_present(
+            cols, ["end:timestamp", "end_timestamp", "time:timestamp"]
+        )
+
+        frame = log[[CASE_COL, ACTIVITY_COL]].copy()
+        for target, source in [(_ORDER, order_col), (_START, start_col), (_END, end_col)]:
+            if source is not None:
+                frame[target] = pd.to_datetime(log[source])
+        return frame
+
+    # PM4Py EventLog: a single pass over all events.
+    cases, activities, orders, starts, ends = [], [], [], [], []
+
+    for case_index, trace in enumerate(log):
+        for event in trace:
+            ts = event.get("time:timestamp")
+            cases.append(case_index)
+            activities.append(event[ACTIVITY_COL])
+            orders.append(ts)
+            starts.append(event.get("start:timestamp", ts))
+            ends.append(event.get("end:timestamp", ts))
+
+    return pd.DataFrame({
+        CASE_COL: cases,
+        ACTIVITY_COL: activities,
+        _ORDER: pd.to_datetime(orders),
+        _START: pd.to_datetime(starts),
+        _END: pd.to_datetime(ends),
+    })
 
 
-def _get_timestamp(event, column):
-    """Get timestamp from a PM4Py event or pandas row."""
-    if isinstance(event, dict):
-        return event.get(column)
-    return event[column]
+def _sorted_by_case(frame):
+    """Sort events chronologically within each case (stable)."""
+    keys = [CASE_COL, _ORDER] if _ORDER in frame.columns else [CASE_COL]
+    return frame.sort_values(keys, kind="stable")
 
 
 def _trace_activity_sequences(log):
@@ -45,44 +103,88 @@ def _trace_activity_sequences(log):
       - pandas DataFrame
     """
 
-    if isinstance(log, pd.DataFrame):
-        df = log.copy()
+    frame = _sorted_by_case(_event_frame(log))
 
-        case_col = "case:concept:name"
-        activity_col = "concept:name"
+    return [
+        group.tolist()
+        for _, group in frame.groupby(CASE_COL, sort=False)[ACTIVITY_COL]
+    ]
 
-        # Try to recover chronological ordering.
-        if "time:timestamp" in df.columns:
-            df = df.sort_values([case_col, "time:timestamp"])
-        elif "start_timestamp" in df.columns:
-            df = df.sort_values([case_col, "start_timestamp"])
-        elif "start:timestamp" in df.columns:
-            df = df.sort_values([case_col, "start:timestamp"])
 
-        return [
-            group[activity_col].tolist()
-            for _, group in df.groupby(case_col, sort=False)
-        ]
+def _ngram_counts(frame, codes, n, start_code, end_code, base):
+    """
+    Count n-grams of all traces in ``frame`` using numpy.
 
-    # PM4Py EventLog
-    sequences = []
+    Every trace is padded with n-1 START and n-1 END symbols and all
+    padded traces are laid out after each other in one integer array.
+    Each n-gram is encoded as a single integer (base-``base`` number),
+    and only windows that lie completely inside one padded trace count.
+    """
 
-    for trace in log:
-        events = list(trace)
+    case_codes = frame[CASE_COL].to_numpy()
 
-        # Sort by timestamp if available.
-        if events and "time:timestamp" in events[0]:
-            events = sorted(
-                events,
-                key=lambda e: pd.Timestamp(e["time:timestamp"])
-            )
+    # Length of each trace, in order of appearance (frame is sorted by case).
+    change = np.flatnonzero(case_codes[1:] != case_codes[:-1]) + 1
+    bounds = np.concatenate(([0], change, [len(case_codes)]))
+    lengths = np.diff(bounds) if len(case_codes) else np.array([], dtype=np.int64)
 
-        sequences.append([
-            e["concept:name"]
-            for e in events
+    padded_lengths = lengths + 2 * (n - 1)
+    padded_offsets = np.concatenate(([0], np.cumsum(padded_lengths)[:-1]))
+    total = int(padded_lengths.sum())
+
+    if total == 0:
+        return pd.Series(dtype=np.int64)
+
+    padded = np.full(total, end_code, dtype=np.int64)
+    for k in range(n - 1):
+        padded[padded_offsets + k] = start_code
+
+    # Position of every event inside its padded trace.
+    event_offsets = np.repeat(padded_offsets + (n - 1), lengths)
+    within_trace = np.arange(len(codes)) - np.repeat(bounds[:-1], lengths)
+    padded[event_offsets + within_trace] = codes
+
+    # Encode every window of length n as one integer.
+    n_windows = total - n + 1
+    keys = np.zeros(n_windows, dtype=np.int64)
+    for k in range(n):
+        keys = keys * base + padded[k:k + n_windows]
+
+    # Keep only windows that do not cross a trace boundary.
+    position = np.arange(total) - np.repeat(padded_offsets, padded_lengths)
+    last_start = np.repeat(padded_lengths - n, padded_lengths)
+    valid = (position <= last_start)[:n_windows]
+
+    return pd.Series(keys[valid]).value_counts()
+
+
+def _ngd(frame1, frame2, n=3):
+    frame1 = _sorted_by_case(frame1)
+    frame2 = _sorted_by_case(frame2)
+
+    # Encode activities of both logs with one shared integer mapping.
+    codes, uniques = pd.factorize(
+        np.concatenate([
+            frame1[ACTIVITY_COL].to_numpy(dtype=object),
+            frame2[ACTIVITY_COL].to_numpy(dtype=object),
         ])
+    )
 
-    return sequences
+    # Dummy symbols get codes that cannot collide with an actual activity.
+    start_code = len(uniques)
+    end_code = len(uniques) + 1
+    base = len(uniques) + 2
+
+    h1 = _ngram_counts(frame1, codes[:len(frame1)], n, start_code, end_code, base)
+    h2 = _ngram_counts(frame2, codes[len(frame1):], n, start_code, end_code, base)
+
+    numerator = h1.sub(h2, fill_value=0).abs().sum()
+    denominator = h1.sum() + h2.sum()
+
+    if denominator == 0:
+        return 0.0
+
+    return float(numerator / denominator)
 
 
 def ngd(log1, log2, n=3):
@@ -99,45 +201,22 @@ def ngd(log1, log2, n=3):
     uses N=3.
     """
 
-    traces1 = _trace_activity_sequences(log1)
-    traces2 = _trace_activity_sequences(log2)
+    return _ngd(_event_frame(log1), _event_frame(log2), n=n)
 
-    # Dummy symbol must not collide with an actual activity.
-    START = "__START__"
-    END = "__END__"
 
-    def make_histogram(traces):
-        histogram = Counter()
+def _require_column(frame, column, message):
+    if column not in frame.columns:
+        raise ValueError(message)
 
-        for trace in traces:
-            padded = (
-                [START] * (n - 1)
-                + trace
-                + [END] * (n - 1)
-            )
 
-            for i in range(len(padded) - n + 1):
-                gram = tuple(padded[i:i+n])
-                histogram[gram] += 1
+def _case_cycle_times_from_frame(frame):
+    _require_column(frame, _START, "Could not find start timestamp column.")
+    _require_column(frame, _END, "Could not find end timestamp column.")
 
-        return histogram
+    grouped = frame.groupby(CASE_COL)
+    cycle_times = (grouped[_END].max() - grouped[_START].min()).dropna()
 
-    h1 = make_histogram(traces1)
-    h2 = make_histogram(traces2)
-
-    all_ngrams = set(h1) | set(h2)
-
-    numerator = sum(
-        abs(h1.get(gram, 0) - h2.get(gram, 0))
-        for gram in all_ngrams
-    )
-
-    denominator = sum(h1.values()) + sum(h2.values())
-
-    if denominator == 0:
-        return 0.0
-
-    return numerator / denominator
+    return cycle_times.dt.total_seconds().to_numpy(dtype=float)
 
 
 def _case_cycle_times(log):
@@ -151,80 +230,22 @@ def _case_cycle_times(log):
       - PM4Py EventLog
       - pandas simulation DataFrame
 
-    The simulator's column names can be adapted here if necessary.
+    The simulator's column names can be adapted in _event_frame if necessary.
     """
 
-    cycle_times = []
+    return _case_cycle_times_from_frame(_event_frame(log))
 
-    if isinstance(log, pd.DataFrame):
-        df = log.copy()
-        case_col = "case:concept:name"
 
-        # Determine start/end timestamp columns.
-        if "start:timestamp" in df.columns:
-            start_col = "start:timestamp"
-        elif "start_timestamp" in df.columns:
-            start_col = "start_timestamp"
-        elif "time:timestamp" in df.columns:
-            start_col = "time:timestamp"
-        else:
-            raise ValueError(
-                "Could not find start timestamp column."
-            )
+def _ctd(frame1, frame2):
+    ct1 = _case_cycle_times_from_frame(frame1)
+    ct2 = _case_cycle_times_from_frame(frame2)
 
-        if "end:timestamp" in df.columns:
-            end_col = "end:timestamp"
-        elif "end_timestamp" in df.columns:
-            end_col = "end_timestamp"
-        elif "time:timestamp" in df.columns:
-            end_col = "time:timestamp"
-        else:
-            raise ValueError(
-                "Could not find end timestamp column."
-            )
+    if len(ct1) == 0 or len(ct2) == 0:
+        return np.nan
 
-        df[start_col] = pd.to_datetime(df[start_col])
-        df[end_col] = pd.to_datetime(df[end_col])
-
-        for _, group in df.groupby(case_col):
-            start = group[start_col].min()
-            end = group[end_col].max()
-
-            if pd.notna(start) and pd.notna(end):
-                cycle_times.append(
-                    (end - start).total_seconds()
-                )
-
-    else:
-        # PM4Py EventLog
-        for trace in log:
-            starts = []
-            ends = []
-
-            for event in trace:
-                # Prefer explicit start timestamp when available.
-                start = event.get(
-                    "start:timestamp",
-                    event.get("time:timestamp")
-                )
-
-                end = event.get(
-                    "end:timestamp",
-                    event.get("time:timestamp")
-                )
-
-                if start is not None:
-                    starts.append(pd.Timestamp(start))
-
-                if end is not None:
-                    ends.append(pd.Timestamp(end))
-
-            if starts and ends:
-                cycle_times.append(
-                    (max(ends) - min(starts)).total_seconds()
-                )
-
-    return np.asarray(cycle_times, dtype=float)
+    return float(
+        wasserstein_distance(ct1, ct2)
+    )
 
 
 def ctd(log1, log2):
@@ -235,15 +256,15 @@ def ctd(log1, log2):
     between the empirical distributions of case cycle times.
     """
 
-    ct1 = _case_cycle_times(log1)
-    ct2 = _case_cycle_times(log2)
+    return _ctd(_event_frame(log1), _event_frame(log2))
 
-    if len(ct1) == 0 or len(ct2) == 0:
-        return np.nan
 
-    return float(
-        wasserstein_distance(ct1, ct2)
-    )
+def _case_arrival_times_from_frame(frame):
+    _require_column(frame, _START, "Could not find timestamp column for CAR.")
+
+    arrivals = frame.groupby(CASE_COL)[_START].min().dropna()
+
+    return pd.DatetimeIndex(arrivals)
 
 
 def case_arrival_times(log):
@@ -251,49 +272,7 @@ def case_arrival_times(log):
     Return the earliest start timestamp of every case.
     """
 
-    arrivals = []
-
-    if isinstance(log, pd.DataFrame):
-        df = log.copy()
-        case_col = "case:concept:name"
-
-        if "start:timestamp" in df.columns:
-            timestamp_col = "start:timestamp"
-        elif "start_timestamp" in df.columns:
-            timestamp_col = "start_timestamp"
-        elif "time:timestamp" in df.columns:
-            timestamp_col = "time:timestamp"
-        else:
-            raise ValueError(
-                "Could not find timestamp column for CAR."
-            )
-
-        df[timestamp_col] = pd.to_datetime(df[timestamp_col])
-
-        arrivals = (
-            df.groupby(case_col)[timestamp_col]
-            .min()
-            .dropna()
-            .tolist()
-        )
-
-    else:
-        for trace in log:
-            timestamps = []
-
-            for event in trace:
-                ts = event.get(
-                    "start:timestamp",
-                    event.get("time:timestamp")
-                )
-
-                if ts is not None:
-                    timestamps.append(pd.Timestamp(ts))
-
-            if timestamps:
-                arrivals.append(min(timestamps))
-
-    return pd.to_datetime(arrivals)
+    return _case_arrival_times_from_frame(_event_frame(log))
 
 
 def _hourly_arrival_histogram(arrivals, start, end):
@@ -374,16 +353,9 @@ def _emd_1d_equal_bins(x, y):
     )
 
 
-def car(log1, log2):
-    """
-    Case Arrival Rate (CAR).
-
-    Cases are represented by their earliest start timestamp.
-    Arrivals are binned hourly and compared using EMD.
-    """
-
-    arrivals1 = case_arrival_times(log1)
-    arrivals2 = case_arrival_times(log2)
+def _car(frame1, frame2):
+    arrivals1 = _case_arrival_times_from_frame(frame1)
+    arrivals2 = _case_arrival_times_from_frame(frame2)
 
     if len(arrivals1) == 0 or len(arrivals2) == 0:
         return np.nan
@@ -405,3 +377,14 @@ def car(log1, log2):
     )
 
     return _emd_1d_equal_bins(h1, h2)
+
+
+def car(log1, log2):
+    """
+    Case Arrival Rate (CAR).
+
+    Cases are represented by their earliest start timestamp.
+    Arrivals are binned hourly and compared using EMD.
+    """
+
+    return _car(_event_frame(log1), _event_frame(log2))
