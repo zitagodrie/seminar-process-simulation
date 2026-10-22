@@ -94,8 +94,44 @@ def train_test_split(log, data_set):
         return split_log_from_file(log, data_set)
     return split_log(log)
 
+def merge_lifecycle_events(log):
+    """Merge start/complete event pairs into single events with a duration.
+
+    Logs such as P2P, ACR, BPI 2012/2017 and CVS store one event per
+    lifecycle transition. Prosit expects one event per activity instance with
+    ``start:timestamp`` and ``time:timestamp`` (completion). Each "start" is
+    paired with the next "complete" of the same activity and resource. Other
+    transitions (e.g. CVS "assign") are dropped, and events without a
+    matching partner become instantaneous events.
+    """
+    for trace in log:
+        merged = []
+        pending = {}  # (activity, resource) -> merged events still waiting for "complete"
+
+        for event in trace:
+            transition = str(event.get("lifecycle:transition", "complete")).lower()
+            key = (event.get("concept:name"), event.get("org:resource"))
+
+            if transition == "start":
+                event["start:timestamp"] = event["time:timestamp"]
+                merged.append(event)
+                pending.setdefault(key, []).append(event)
+            elif transition == "complete":
+                if pending.get(key):
+                    started = pending[key].pop(0)
+                    started["time:timestamp"] = event["time:timestamp"]
+                else:
+                    merged.append(event)
+
+        trace[:] = merged
+
+    return log
+
+
 def clean_timestamp_features(log):
     """Add start timestamps and remove event fields Prosit cannot discover."""
+    log = merge_lifecycle_events(log)
+
     # Prosit 1.0.3 treats unknown event columns as case attributes and later
     # reads them from the first event of every trace. These CVS fields are
     # event-level metadata and are missing from some first events, so keeping

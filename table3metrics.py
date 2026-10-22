@@ -140,7 +140,10 @@ def _get_arrival_times(log):
     """
     Return case arrival timestamps.
 
-    For a real event log this is the first event timestamp of each case.
+    The arrival is the earliest moment a case's events became available:
+    enabled:timestamp (Prosit output), else start:timestamp, else the
+    completion timestamp. Using only time:timestamp would add the first
+    activity's duration to the arrival.
     """
     arrivals = []
 
@@ -149,7 +152,7 @@ def _get_arrival_times(log):
             continue
 
         timestamps = [
-            _event_timestamp(event, "time:timestamp")
+            _event_enabled(event)
             for event in trace
         ]
 
@@ -313,6 +316,16 @@ def _event_start(event):
     return start
 
 
+def _event_enabled(event):
+    """Moment the event became enabled, falling back to its start."""
+    enabled = _event_timestamp(event, "enabled:timestamp")
+
+    if enabled is None:
+        enabled = _event_start(event)
+
+    return enabled
+
+
 def _execution_features(event, attributes, history, params, cache):
     """
     Features used by Prosit's execution-time decision tree.
@@ -357,11 +370,12 @@ def _waiting_features(event, attributes, history, params, cache):
     """
     activity = event.get("concept:name")
 
-    start = _event_start(event)
+    # The waiting time is sampled when the activity becomes enabled.
+    enabled = _event_enabled(event)
 
     features = {
-        "hour": start.hour,
-        "weekday": start.weekday(),
+        "hour": enabled.hour,
+        "weekday": enabled.weekday(),
     }
 
     # Prosit's one-hot waiting activity vector
@@ -376,14 +390,10 @@ def _waiting_features(event, attributes, history, params, cache):
 
     features = features | attributes | history
 
-    # Workload/queue-length features cannot in general be reconstructed
-    # exactly from an ordinary event log without reproducing Prosit's
-    # resource scheduler. If the fitted tree actually uses these features,
-    # we flag that below rather than silently fabricating them.
-    if params.use_workload_features:
-        features["workload"] = 0
-        features["queue_length"] = 0
-
+    # Workload/queue-length features cannot be reconstructed from an
+    # ordinary event log without reproducing Prosit's resource scheduler.
+    # They are deliberately left out, so a tree that splits on them makes
+    # _missing_features fail loudly instead of using fabricated values.
     return features
 
 
@@ -733,6 +743,60 @@ def _as_traces(log):
     return log
 
 
+def _with_enabled_timestamps(traces, params):
+    """
+    Add enabled:timestamp to the events of a real event log.
+
+    Only Prosit's simulation output has this column, so without it the real
+    side of the waiting-time metric is empty. The enabled times are
+    reconstructed with the same alignment-based replay that Prosit's own
+    discovery uses (build_df_features). Traces are returned as copies; the
+    input log is not modified. Events are matched to the replay rows by case,
+    resource and start time; events the alignment dropped (log moves) are left
+    without enabled:timestamp and are ignored by the waiting-time metric.
+    """
+    from prosit.utils.common_utils import build_df_features
+
+    df = build_df_features(
+        traces,
+        params.net,
+        params.initial_marking,
+        params.final_marking,
+        params.act_to_resources,
+        params.net_transition_labels,
+        params.resources,
+        params.label_data_attributes,
+    )
+    df = df[df["resource"].notna() & df["start_t"].notna()]
+    enabled_by_event = {
+        (case, resource, start): enabled
+        for case, resource, start, enabled in zip(
+            df["case_id"], df["resource"], df["start_t"], df["enabled_t"]
+        )
+    }
+
+    enriched = []
+
+    for trace in traces:
+        case = trace[0]["case:concept:name"]
+        events = []
+
+        for event in trace:
+            event = dict(event)
+            enabled = enabled_by_event.get(
+                (case, event.get("org:resource"), event.get("start:timestamp"))
+            )
+
+            if enabled is not None:
+                event["enabled:timestamp"] = enabled
+
+            events.append(event)
+
+        enriched.append(events)
+
+    return enriched
+
+
 def prepare_rule_data(log, params):
     """
     Collect everything the four rule metrics need from one log.
@@ -742,6 +806,9 @@ def prepare_rule_data(log, params):
     via real_data=...
     """
     traces = _as_traces(log)
+
+    if not isinstance(log, pd.DataFrame):
+        traces = _with_enabled_timestamps(traces, params)
 
     return {
         "CFD": _transition_firing_frequencies(traces, params),
