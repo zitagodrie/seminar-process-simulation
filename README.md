@@ -33,10 +33,10 @@ Available dataset keys are `p2p`, `cvs`, `acr`, `bpi2012`, and `bpi2017`.
 
 The `--simulations` option (or `-s`) controls how many simulation runs are
 performed. It accepts `none` (the default, no simulation), `fast` (one run),
-or `realistic` (five runs):
+`paper-5` (five runs), or `paper-10` (ten runs):
 
 ```bash
-python simulation.py --dataset p2p --simulations realistic
+python simulation.py --dataset p2p --simulations paper-5
 ```
 
 The short form is also supported:
@@ -48,4 +48,4 @@ python simulation.py -d p2p -s fast
 `cvs` is split chronologically into 80% training and 20% test data. The
 `p2p`, `acr`, `bpi2012`, and `bpi2017` datasets use their corresponding
 `data/<dataset>/folds/train.csv` and `test.csv` files. When simulations are
-run, metrics are written to `results/<dataset>_<mode>_metrics.csv`.
+run, metrics are written to `metrics.json` (per dataset: mean, std and the values of each run for every metric).

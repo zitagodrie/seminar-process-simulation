@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run simulation.py in the "realistic" setting (5 runs) for all 5 datasets.
+# Run simulation.py in the "paper-5" setting (5 runs) for all 5 datasets.
 # Usage: ./run_all.sh [dataset ...]   (no arguments = all datasets)
 
 set -u
@@ -23,8 +23,8 @@ fi
 
 failed=()
 for ds in "${DATASETS[@]}"; do
-    echo "=== Running $ds (realistic) ==="
-    if ! python simulation.py --dataset "$ds" --simulations realistic; then
+    echo "=== Running $ds (paper-10) ==="
+    if ! python simulation.py --dataset "$ds" --simulations paper-10; then
         echo "!!! $ds failed" >&2
         failed+=("$ds")
     fi
@@ -34,4 +34,4 @@ if [ "${#failed[@]}" -gt 0 ]; then
     echo "Failed datasets: ${failed[*]}" >&2
     exit 1
 fi
-echo "All done. Metrics are in results/<dataset>_realistic_metrics.csv"
+echo "All done. Metrics are in metrics.json"

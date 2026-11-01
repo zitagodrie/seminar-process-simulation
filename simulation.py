@@ -4,6 +4,7 @@ The dataset-specific details are kept in :class:`DatasetConfig` so adding a
 new log does not require another branch in the main simulation workflow.
 """
 
+import json
 import random
 import argparse
 import pandas as pd
@@ -26,7 +27,7 @@ warnings.filterwarnings("ignore")
 RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 
-N_SIM = {"none": 0, "fast": 1, "realistic": 5}  # number of simulation runs for each mode, realistic is the setting of the paper
+N_SIM = {"none": 0, "fast": 1, "paper-5": 5, "paper-10": 10}  # number of simulation runs for each mode
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run a process simulation experiment.")
@@ -35,7 +36,7 @@ def parse_args():
         "--dataset",
         choices=DATASETS,
         required=True,
-        help="Dataset to simulate.",
+        help= "Dataset to simulate.",
     )
     parser.add_argument(
         "-s",
@@ -67,18 +68,35 @@ def make_bpmn_boundary_transitions_silent(net):
 
     return net
 
-def write_metrics_to_csv(metric_avg: dict, args, path: str = "metrics.csv") -> None:
-    """Append averaged metrics, run arguments, and a timestamp to a CSV file.
+METRIC_COLUMNS = [
+    "NGD", "CTD", "CAR", "Rule-CFD", "Rule-ATD", "Rule-ETD", "Rule-WTD", "Execution Time Entropy",
+]
 
-    The result is one row per call: metrics, then args, then timestamp.
+
+def write_metrics_to_json(metrics_df: pd.DataFrame, args, path: str = "metrics.json") -> None:
+    """Store mean, std and the per-run values of every metric in a JSON file.
+
+    The layout is {dataset: {"prosit-replication": {metric: {"mean", "std", "values"}}}}.
+    Existing results of other datasets in the file are kept, results of the
+    same dataset are overwritten.
     """
-    row = {
-        "timestamp": datetime.now().isoformat(),
-        **vars(args),
-        **metric_avg,
+    summary = {
+        metric: {
+            "mean": float(metrics_df[metric].mean()),
+            "std": float(metrics_df[metric].std(ddof=0)),
+            "values": [float(v) for v in metrics_df[metric]],
+        }
+        for metric in METRIC_COLUMNS
     }
-    file_exists = os.path.exists(path)
-    pd.DataFrame([row]).to_csv(path, mode="a", header=not file_exists, index=False)
+
+    data = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    data.setdefault(args.dataset, {})["prosit-replication"] = summary
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
     print(f"Metrics written to {path}")
 
 def simulate_process_with_metrics(engine, test_log, params, args):
@@ -131,7 +149,7 @@ def simulate_process_with_metrics(engine, test_log, params, args):
         "Execution Time Entropy": metrics_df["Execution Time Entropy"].mean()
     }
 
-    write_metrics_to_csv(averages, args)
+    write_metrics_to_json(metrics_df, args)
 
 
     print("\n========== Average metrics ==========")
