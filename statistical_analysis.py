@@ -7,6 +7,36 @@ from scipy.stats import ttest_ind
 from statsmodels.stats.multitest import multipletests
 
 
+# Transform dictionary: renames names from our file to the paper's naming, so
+# both files can be compared. Names that are not listed are left unchanged.
+TRANSFORM = {
+    # dataset names
+    "bpi2012": "BPI_Challenge_2012_W_Two_TS",
+    # method names
+    "prosit-replication": "prosit",
+    # metric names
+    "NGD": "2gd",
+    "CTD": "ctd",
+    "CAR": "car",
+    "Rule-ATD": "arrival_tree",
+    "Rule-WTD": "waiting_tree",
+    "Rule-ETD": "execution_tree",
+    "Rule-CFD": "transition_tree",
+    "Execution Time Entropy": "etd_entropy",
+}
+
+
+def normalize(node):
+    """Apply TRANSFORM to keys and unwrap {"values": [...]} nodes.
+    Necessary for compatibility between our results and the paper's results,
+    which use different names."""
+    if not isinstance(node, dict):
+        return node
+    if isinstance(node.get("values"), list):
+        return node["values"]
+    return {TRANSFORM.get(key, key): normalize(value) for key, value in node.items()}
+
+
 def compare(a, b, path=()):
     results = []
 
@@ -46,7 +76,7 @@ def main():
     with open(sys.argv[2], encoding="utf-8") as f:
         b = json.load(f)
 
-    results = compare(a, b)
+    results = compare(normalize(a), normalize(b))
     if not results:
         print("No matching metric lists with sufficient observations.")
         return
