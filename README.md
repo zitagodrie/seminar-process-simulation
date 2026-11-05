@@ -9,7 +9,7 @@ Install the pinned Python dependencies before running the simulation:
 python -m pip install -r requirements.txt
 ```
 
-## Run a simulation
+## Run a simulation using our code
 
 Specify the dataset with the required `--dataset` option (or `-d` for short):
 
@@ -49,3 +49,12 @@ python simulation.py -d p2p -s fast
 `p2p`, `acr`, `bpi2012`, and `bpi2017` datasets use their corresponding
 `data/<dataset>/folds/train.csv` and `test.csv` files. When simulations are
 run, metrics are written to `metrics.json` (per dataset: mean, std and the values of each run for every metric).
+
+
+## Analyse and compare results
+
+The following command runs t-tests on the summary files produced by our code, and the code by the author. The summary of us running the code by the author on the github branch is found in `summary_our_expB.json`, and the summary from running that code as given by the author is found in `summary_github_expB.json`.
+
+```bash
+python stat_analysis.py summary_a.json summary_b.json
+```
